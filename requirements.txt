@@ -1,0 +1,7 @@
+# Runtime dependencies for ahaMargin-linux.
+#
+# PySide6-Essentials is the smaller Qt 6 package: it contains QtCore, QtGui,
+# QtWidgets and QtSvg, which is everything this application needs.  The full
+# PySide6 wheel also ships QtWebEngine, which is large and unused here.
+PySide6-Essentials>=6.5
+PyMuPDF>=1.23

@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=ahaMargin-linux
+GenericName=PDF Marker and Margin Notes
+Comment=Capture passages into a margin note column and mark up PDFs
+Exec=ahaMargin-linux %f
+Icon=application-pdf
+Terminal=false
+Categories=Office;Viewer;Education;TextEditor;
+MimeType=application/pdf;
+Keywords=pdf;annotation;highlight;notes;ahamargin;
+StartupNotify=true
+StartupWMClass=ahaMargin-linux
