@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ahaMargin-linux"
-version = "1.0.1"
+version = "1.1.0"
 description = "A MarginNote style PDF marker for Linux: capture passages into a margin note column."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = { text = "MIT; bundled assistant components: PolyForm Noncommercial 1.0.0" }
 authors = [{ name = "ahaMargin-linux contributors" }]
 keywords = ["pdf", "annotation", "highlight", "notes", "ahamargin", "qt", "pyside6"]
 classifiers = [
@@ -39,3 +39,9 @@ Issues = "https://github.com/chengmingbo/ahaMargin-linux/issues"
 
 [tool.setuptools.packages.find]
 include = ["ahamargin*"]
+
+[tool.setuptools]
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
+
+[tool.setuptools.package-data]
+ahamargin = ["vendor/heehawpdf/*.js", "vendor/heehawpdf/*.sh", "vendor/heehawpdf/LICENSE.md"]

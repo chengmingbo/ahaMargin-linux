@@ -14,6 +14,8 @@ if command -v apt-get >/dev/null 2>&1; then
     echo "Installing Debian/Ubuntu packages..."
     apt-get update
     apt-get install -y --no-install-recommends \
+        curl \
+        libsecret-tools \
         libgl1 \
         libegl1 \
         libxkbcommon-x11-0 \
@@ -31,6 +33,8 @@ if command -v apt-get >/dev/null 2>&1; then
 elif command -v dnf >/dev/null 2>&1; then
     echo "Installing Fedora packages..."
     dnf install -y \
+        curl \
+        libsecret \
         mesa-libGL \
         libxkbcommon-x11 \
         libxcb-cursor \

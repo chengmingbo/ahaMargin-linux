@@ -10,9 +10,9 @@ The package is organised in two layers:
     The Qt 6 user interface: the canvas, the margin note pane and the sidebar.
 """
 
-__version__ = "1.0.1"
+__version__ = "1.1.0"
 APP_NAME = "ahaMargin-linux"
 APP_ID = "io.github.chengmingbo.ahaMargin-linux"
 ORGANIZATION_NAME = "ahaMargin"
 __author__ = "ahaMargin-linux contributors"
-__license__ = "MIT"
+__license__ = "MIT (app); PolyForm Noncommercial 1.0.0 (assistant core)"

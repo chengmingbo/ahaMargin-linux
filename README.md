@@ -5,6 +5,9 @@ it is captured into a note card in the margin column, where the quoted text
 stays attached to your own thoughts. Mark up the page with highlights, ink and
 shapes, then export the result as an annotated PDF, a study sheet or a mind map.
 
+The built-in **AI Assistant**, adapted from heehawPDF, can explain the document,
+cite pages, and suggest highlights and linked margin notes.
+
 Built with **PySide6 (Qt 6)** and **PyMuPDF**. This is an independent
 implementation and is not affiliated with MarginNote or its authors.
 
@@ -111,6 +114,46 @@ the colour it has in the app.
 
 ---
 
+## AI Assistant
+
+Open **AI → AI Assistant** (`Ctrl+Shift+I`) or click the sparkle in the toolbar.
+The panel shares the right dock with Margin Notes. `Ctrl+Shift+A` opens it with
+Claude selected; `Ctrl+,` opens assistant settings.
+
+- **Tools:** Claude, Codex, OpenCode, DeepSeek, Kimi, Qwen Code, Gemini, and a
+  custom shell command. Sign in to the CLI in a terminal first. Tools run
+  inside your login shell, so your PATH and aliases work.
+- **APIs:** DeepSeek, Kimi, Qwen, GLM, MiniMax, OpenAI, OpenRouter, Ollama, and
+  any OpenAI-compatible `/chat/completions` endpoint. **＋ Add API** saves named
+  providers, with starting points including SiliconFlow, Groq, and LM Studio.
+  Set the model, URL, key, optional proxy, and standing instructions in Settings.
+  **Save & Test** checks the connection without sending PDF text.
+- **Context:** the extracted PDF text has page markers, the current page, and
+  your latest text selection. Long documents use a bounded excerpt around the
+  current page; omitted pages are not represented as having been read. Clear
+  the selection chip to ask about the document instead. The chosen provider
+  receives this text when you send a message or use a quick action.
+- **Reading:** Summarize page, Summarize PDF, Explain, Key points, Translate,
+  and Questions. Replies stream into the panel; click a page citation to jump.
+  Use `Ctrl+Enter` to send; messages sent during a reply queue in order.
+- **Annotating:** ask for highlights, underlines, strikeouts, or margin notes.
+  Suggestions have **Show passage** and **Add to PDF** links. The app validates
+  the page and exact quote before adding anything. Added notes support undo,
+  save, export, and printing, just like notes you make by hand.
+- **Sessions:** Claude resumes its conversation; other tools receive recent
+  turns. New chat, switching providers, and opening or closing a document clear
+  the conversation. Stop cancels the tool and its child processes.
+- **Keys:** the desktop keyring is preferred (`secret-tool`). If unavailable,
+  keys use an owner-only file at `~/.local/share/ahaMargin-linux/keys.json`,
+  outside ordinary settings. Keys may also come from the provider's usual
+  environment variable. Per-request PDF context is kept in private temporary
+  folders and removed when the request completes.
+
+API requests need `curl`; Debian/Ubuntu users can install `libsecret-tools`
+for desktop keyring support. `scripts/install-deps.sh` installs both.
+
+![AI Assistant](docs/ai-assistant.png)
+
 ## Install
 
 ### 1. System libraries
@@ -209,6 +252,8 @@ Installable wheels and source archives are available on the
 | `Ctrl+Alt+Down` / `Ctrl+Alt+Up` | Next / previous margin note |
 | `Ctrl+=` / `Ctrl+-` | Zoom in / out |
 | `Ctrl+0` | Fit width |
+| `Ctrl+Shift+I` / `Ctrl+Shift+A` | AI Assistant / Claude |
+| `Ctrl+,` | Assistant settings |
 | `F11` | Focus mode (hide the panels) |
 | `Page Up` / `Page Down` | Previous / next page |
 
@@ -304,6 +349,8 @@ python3 tests/test_ahamargin.py     # core: model, storage, search, export, prin
 python3 tests/gui_smoke.py out.png   # GUI: selection, tools, persistence, print
 python3 tests/test_drawing_preview.py # live drawing positions across zoom and scroll
 python3 tests/test_settings.py        # migration of preferences from the previous name
+python3 tests/test_assistant.py       # fake CLI and localhost API, no external AI calls
+node --test tests/assistant_core/*.test.js # shared heehawPDF protocol tests (optional Node)
 ```
 
 The core suite has 88 checks, the GUI suite 101.
@@ -331,4 +378,6 @@ pipeline are all exercised for real. It writes a screenshot at the end.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+The application code is MIT — see [LICENSE](LICENSE). The bundled heehawPDF
+assistant core and runner use the PolyForm Noncommercial License 1.0.0 — see
+[third-party notices](THIRD_PARTY_NOTICES.md) and the included component license.

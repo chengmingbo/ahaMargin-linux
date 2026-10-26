@@ -54,6 +54,7 @@ from .sidebar import Sidebar
 from .theme import DARK, LIGHT, Theme, apply_theme
 from .tools import Tool
 from .settings import application_settings
+from .assistant_panel import AssistantPanel
 
 # Typing that continues without a pause is treated as a single undo step.
 BODY_EDIT_BURST = 1.5
@@ -163,6 +164,17 @@ class MainWindow(QMainWindow):
         self.resizeDocks([self.right_dock], [380], Qt.Orientation.Horizontal)
         self.resizeDocks([self.left_dock], [340], Qt.Orientation.Horizontal)
 
+        self.assistant_panel = AssistantPanel(self._settings)
+        self.assistant_dock = QDockWidget("AI Assistant", self)
+        self.assistant_dock.setObjectName("AssistantDock")
+        self.assistant_dock.setWidget(self.assistant_panel)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.assistant_dock)
+        self.tabifyDockWidget(self.right_dock, self.assistant_dock)
+        self.assistant_dock.hide()
+        self.assistant_panel.annotationRequested.connect(self._add_annotation)
+        self.assistant_panel.pageRequested.connect(self._goto_page)
+        self.assistant_panel.revealRequested.connect(self._reveal_assistant_passage)
+
         self.sidebar.pageActivated.connect(self._goto_page)
         self.sidebar.noteActivated.connect(self._activate_note)
         self.sidebar.searchRequested.connect(self._run_search)
@@ -270,6 +282,12 @@ class MainWindow(QMainWindow):
         self.act_toggle_margin.triggered.connect(self.right_dock.setVisible)
         bar.addAction(self.act_toggle_margin)
 
+        self.act_assistant = QAction(icon("sparkle", "#4b5563", 20), "AI Assistant", self)
+        self.act_assistant.setShortcut(QKeySequence("Ctrl+Shift+I"))
+        self.act_assistant.setToolTip("AI Assistant (Ctrl+Shift+I)")
+        self.act_assistant.triggered.connect(self.show_assistant)
+        bar.addAction(self.act_assistant)
+
         self.act_theme = QAction(icon("moon", "#4b5563", 20), "Dark theme", self)
         self.act_theme.triggered.connect(self._toggle_theme)
         bar.addAction(self.act_theme)
@@ -286,6 +304,7 @@ class MainWindow(QMainWindow):
             self.act_fit_page: "fit-page",
             self.act_toggle_sidebar: "panel-left",
             self.act_toggle_margin: "panel-right",
+            self.act_assistant: "sparkle",
         }
         for tool, action in self.tool_actions.items():
             self._toolbar_icon_names[action] = tool.icon
@@ -364,6 +383,7 @@ class MainWindow(QMainWindow):
         view_menu = menu.addMenu("&View")
         view_menu.addAction(self.act_toggle_sidebar)
         view_menu.addAction(self.act_toggle_margin)
+        view_menu.addAction(self.act_assistant)
         view_menu.addSeparator()
         view_menu.addAction(self.act_zoom_in)
         view_menu.addAction(self.act_zoom_out)
@@ -407,6 +427,17 @@ class MainWindow(QMainWindow):
         self.act_new_note.setShortcut(QKeySequence("Ctrl+Shift+N"))
         self.act_new_note.triggered.connect(self._add_blank_note)
         annotate_menu.addAction(self.act_new_note)
+
+        ai_menu = menu.addMenu("&AI")
+        ai_menu.addAction(self.act_assistant)
+        claude = QAction("Claude", self)
+        claude.setShortcut(QKeySequence("Ctrl+Shift+A"))
+        claude.triggered.connect(lambda: self.show_assistant(provider="claude"))
+        ai_menu.addAction(claude)
+        settings = QAction("Assistant settings…", self)
+        settings.setShortcut(QKeySequence("Ctrl+,"))
+        settings.triggered.connect(self.show_assistant_settings)
+        ai_menu.addAction(settings)
 
         help_menu = menu.addMenu("&Help")
         act_shortcuts = QAction("Keyboard shortcuts", self)
@@ -512,6 +543,7 @@ class MainWindow(QMainWindow):
         self._remember_recent(path)
 
         self.doc = PdfDocument(path, password or None)
+        self.assistant_panel.set_document(self.doc)
         self.view.set_document(self.doc)
         self.view.set_annotations(store.annotations)
         self.sidebar.set_document(self.doc)
@@ -523,6 +555,7 @@ class MainWindow(QMainWindow):
         return True
 
     def close_document(self) -> None:
+        self.assistant_panel.set_document(None)
         if self.store is not None:
             self.store.doc.close()
         self.store = None
@@ -560,6 +593,7 @@ class MainWindow(QMainWindow):
     def _on_selection(self, page: int, text: str, rects: List) -> None:
         if self.store is None:
             return
+        self.assistant_panel.set_selection({"page": page + 1, "text": text})
         if self._tool is Tool.POINTER:
             note = Annotation(
                 kind=AnnKind.MARGIN,
@@ -904,6 +938,24 @@ class MainWindow(QMainWindow):
         if self.doc is None:
             return
         self.status_page.setText(f"Page {page + 1} / {self.doc.page_count}")
+        self.assistant_panel.set_page(page)
+
+    def show_assistant(self, checked=False, provider=None) -> None:
+        if provider:
+            index = self.assistant_panel.picker.findData(provider)
+            if index >= 0:
+                self.assistant_panel.picker.setCurrentIndex(index)
+        self.assistant_dock.show()
+        self.assistant_dock.raise_()
+        self.assistant_panel.input.setFocus()
+
+    def show_assistant_settings(self) -> None:
+        self.show_assistant()
+        self.assistant_panel.open_settings()
+
+    def _reveal_assistant_passage(self, page: int, rect) -> None:
+        self.view.scroll_to_rect(page, rect)
+        self.view.flash_rect(page, rect)
 
     def _on_zoom_changed(self, zoom: float) -> None:
         text = f"{zoom * 100:.0f}%"
@@ -1188,6 +1240,7 @@ class MainWindow(QMainWindow):
     def _set_focus_mode(self, enabled: bool) -> None:
         """Hide the toolbars and panels so the document can be read undisturbed."""
         if enabled:
+            self._pre_focus_ai_visible = self.assistant_dock.isVisible()
             self._pre_focus_visibility = (
                 self.toolbar.isVisible(),
                 self.left_dock.isVisible(),
@@ -1196,12 +1249,14 @@ class MainWindow(QMainWindow):
             self.toolbar.setVisible(False)
             self.left_dock.setVisible(False)
             self.right_dock.setVisible(False)
+            self.assistant_dock.hide()
             self.status_hint.setText("Focus mode - press F11 to leave")
         else:
             toolbar, left, right = self._pre_focus_visibility
             self.toolbar.setVisible(toolbar)
             self.left_dock.setVisible(left)
             self.right_dock.setVisible(right)
+            self.assistant_dock.setVisible(getattr(self, "_pre_focus_ai_visible", False))
             self.act_toggle_sidebar.setChecked(left)
             self.act_toggle_margin.setChecked(right)
             self.status_hint.setText("")
@@ -1248,6 +1303,7 @@ class MainWindow(QMainWindow):
         apply_theme(QApplication.instance(), theme)
         self.view.set_theme(theme)
         self.margin_panel.set_theme(theme)
+        self.assistant_panel.set_theme(theme)
         self.sidebar.set_theme(theme)
         self.act_theme.setIcon(icon("sun" if theme is DARK else "moon", theme.text_dim, 20))
         self.act_theme.setText("Light theme" if theme is DARK else "Dark theme")
@@ -1344,5 +1400,6 @@ class MainWindow(QMainWindow):
                 self.store.doc.close()
             except Exception:
                 pass
+        self.assistant_panel.stop()
         super().closeEvent(event)
 
