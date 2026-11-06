@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 from pathlib import Path
@@ -181,6 +182,84 @@ def validate_options(provider, options):
         raise ValueError("Enter the custom command in Settings first.")
 
 
+# Pictures pasted into the message box.
+MAX_IMAGES = 4
+MAX_IMAGE_EDGE = 1568
+MAX_THUMB_EDGE = 240
+MAX_IMAGE_BYTES = 8 * 1024 * 1024
+
+
+def fit_size(width, height, max_edge):
+    """Scale width and height so the long edge is at most max_edge; never enlarges."""
+    if width <= 0 or height <= 0:
+        return 0, 0
+    scale = min(1.0, max_edge / max(width, height))
+    return max(1, round(width * scale)), max(1, round(height * scale))
+
+
+class AssistantImage:
+    """A picture pasted into the assistant, sent with the next question."""
+
+    def __init__(self, data, media_type="image/jpeg", thumb=None):
+        self.data = data
+        self.media_type = media_type
+        self.thumb = thumb
+
+    def data_url(self):
+        return "data:" + self.media_type + ";base64," + base64.b64encode(self.data).decode("ascii")
+
+    def content_part(self):
+        """One image_url content part, the shape OpenAI-compatible APIs expect."""
+        return {"type": "image_url", "image_url": {"url": self.data_url()}}
+
+
+def image_content(text, images):
+    """The content of a user message that carries pictures: the text first, then one image_url block per picture."""
+    parts = [{"type": "text", "text": text or ""}]
+    for image in images or []:
+        parts.append(image.content_part())
+    return parts
+
+
+def figure_name(index):
+    """The name a picture gets in the job folder."""
+    return f"figure-{index + 1}.jpg"
+
+
+def figures_prompt(images):
+    """The prompt section for a turn whose pictures travel as files the agent can read."""
+    if not images:
+        return ""
+    lines = []
+    for index in range(len(images)):
+        lines.append(f'<figure path="./{figure_name(index)}">'
+                     "The user attached a picture. Read this file to see it.</figure>")
+    return "\n".join(lines)
+
+
+def allow_read_tool(invocation):
+    """Give the agent the Read tool for this turn, so it can open a pasted picture."""
+    argv = list(invocation.get("argv", []))
+    if "--tools" in argv:
+        argv[argv.index("--tools") + 1] = "Read"
+    return dict(invocation, argv=argv)
+
+
+def validate_images(images):
+    """Reject pictures we cannot send, or too many of them."""
+    if not images:
+        return
+    if len(images) > MAX_IMAGES:
+        raise ValueError(f"At most {MAX_IMAGES} pictures per message.")
+    for image in images:
+        if image.media_type not in ("image/jpeg", "image/png"):
+            raise ValueError("A pasted picture must be a JPEG or a PNG.")
+        if not image.data:
+            raise ValueError("A pasted picture is empty.")
+        if len(image.data) > MAX_IMAGE_BYTES:
+            raise ValueError("A pasted picture is too large to send.")
+
+
 class Agent(QObject):
     updated = Signal(object)
     finished = Signal(object)
@@ -203,9 +282,10 @@ class Agent(QObject):
         self.session_id = str(uuid.uuid4())
         self.session_provider = None
 
-    def run(self, prompt, history, provider=None, options=None, testing=False):
+    def run(self, prompt, history, provider=None, options=None, testing=False, images=None):
         if self.running:
             raise ValueError("The assistant is already answering.")
+        validate_images(images)
         provider = dict(provider or self.config.provider())
         options = options or self.config.options(provider)
         validate_options(provider, options)
@@ -215,6 +295,9 @@ class Agent(QObject):
         invocation = self.core.call("invocation", provider, dict(options, customCommand=options.get("command", ""),
             sessionId=str(uuid.uuid4()) if testing else self.session_id,
             resume=not testing and self.session_provider == provider["id"]))
+        if images and provider["id"] == "claude":
+            # Claude may read the picture from the job folder, for this turn only.
+            invocation = allow_read_tool(invocation)
         # A private root prevents another local user from reading PDF context.
         root = Path(tempfile.gettempdir()) / f"ahamargin-ai-{os.getuid()}"
         root.mkdir(mode=0o700, exist_ok=True)
@@ -228,14 +311,24 @@ class Agent(QObject):
         if instructions:
             system += "\n\nThe user's standing instructions:\n" + instructions
         (self.job / "system.txt").write_text(system)
+        # A pasted picture travels as a file in the job folder, which is also the
+        # folder the agent runs in, so it can read it.
+        figures = ""
+        if images and provider["kind"] != "api":
+            for index, image in enumerate(images):
+                (self.job / figure_name(index)).write_bytes(image.data)
+            figures = "\n\n" + figures_prompt(images)
         if provider["kind"] == "api":
             body = self.core.call("chatRequest", options["model"], system, history, prompt)
+            if images:
+                # The picture travels inside the message, as an image_url block.
+                body["messages"][-1]["content"] = image_content(prompt, images)
             (self.job / "request.json").write_text(json.dumps(body))
             text = ""
         elif provider.get("sessions"):
-            text = prompt
+            text = prompt + figures
         else:
-            text = self.core.call("statelessPrompt", system, history, prompt)
+            text = self.core.call("statelessPrompt", system, history, prompt + figures)
         (self.job / "prompt.txt").write_text(text)
         self.core.start_output(invocation["format"])
         self.offset, self.partial, self.cancelled = 0, b"", False

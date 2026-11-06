@@ -5,17 +5,28 @@ from __future__ import annotations
 from html import escape
 import uuid
 
-from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut
+from PySide6.QtCore import QBuffer, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import (
+    QDesktopServices, QImage, QImageReader, QKeySequence, QPainter, QPixmap, QShortcut,
+)
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout,
     QLabel, QLineEdit, QPlainTextEdit, QPushButton, QTextBrowser, QVBoxLayout, QWidget,
 )
 
 from ..assistant import (
-    Agent, AssistantConfig, AssistantCore, KeyStore, document_context,
+    Agent, AssistantConfig, AssistantCore, AssistantImage, KeyStore, MAX_IMAGES,
+    MAX_IMAGE_BYTES, MAX_IMAGE_EDGE, MAX_THUMB_EDGE, document_context, fit_size,
     proposed_annotation, validate_options,
 )
+
+# The clipboard may hold any of these; vectors and other odd formats are not
+# pictures we can show or send.
+RASTER_FORMATS = ("image/png", "image/jpeg", "image/jpg", "image/bmp", "image/x-bmp",
+                  "image/gif", "image/tiff", "image/x-icon", "image/x-xpixmap")
+
+# What a message with only a picture asks.
+IMAGE_REQUEST = "Please look at the attached picture."
 
 API_PRESETS = [
     ("MiniMax", "https://api.minimaxi.com/v1", "MiniMax-M2.7", False),
@@ -32,6 +43,86 @@ API_PRESETS = [
     ("LM Studio (local)", "http://localhost:1234/v1", "", True),
     ("Other", "https://", "", False),
 ]
+
+
+def paint_on_white(image):
+    """Scale a picture down and paint it on white, so transparency does not go out black."""
+    width, height = fit_size(image.width(), image.height(), MAX_IMAGE_EDGE)
+    if not width or not height:
+        return None
+    scaled = image.scaled(width, height, Qt.AspectRatioMode.IgnoreAspectRatio,
+                          Qt.TransformationMode.SmoothTransformation)
+    painted = QImage(width, height, QImage.Format.Format_RGB32)
+    painted.fill(Qt.GlobalColor.white)
+    painter = QPainter(painted)
+    painter.drawImage(0, 0, scaled)
+    painter.end()
+    return painted
+
+
+def clipboard_image(mime):
+    """The picture on the clipboard, scaled to the size a vision model expects.
+
+    Returns None when the clipboard holds no picture we can read.
+    """
+    if mime is None:
+        return None
+    for fmt in mime.formats():
+        if fmt.lower() not in RASTER_FORMATS:
+            continue
+        data = bytes(mime.data(fmt))
+        if not data:
+            continue
+        reader = QImageReader()
+        reader.setData(data)
+        size = reader.size()
+        if size.isValid():
+            # Read the picture at the size we need, so a huge screenshot stays small.
+            reader.setScaledSize(QSize(*fit_size(size.width(), size.height(), MAX_IMAGE_EDGE)))
+        image = reader.read()
+        if not image.isNull():
+            return paint_on_white(image)
+    if mime.hasImage():
+        image = mime.imageData()
+        if isinstance(image, QPixmap):
+            image = image.toImage()
+        if isinstance(image, QImage) and not image.isNull():
+            return paint_on_white(image)
+    return None
+
+
+def encode_image(image, quality=85):
+    """The picture as JPEG bytes, small enough for a vision model."""
+    buffer = QBuffer()
+    buffer.open(QBuffer.OpenModeFlag.WriteOnly)
+    if not image.save(buffer, "JPEG", quality):
+        return None
+    return bytes(buffer.data())
+
+
+def encode_thumbnail(image):
+    """A small preview of the picture, as PNG bytes."""
+    width, height = fit_size(image.width(), image.height(), MAX_THUMB_EDGE)
+    thumb = image.scaled(width, height, Qt.AspectRatioMode.IgnoreAspectRatio,
+                         Qt.TransformationMode.SmoothTransformation)
+    buffer = QBuffer()
+    buffer.open(QBuffer.OpenModeFlag.WriteOnly)
+    if not thumb.save(buffer, "PNG"):
+        return None
+    return bytes(buffer.data())
+
+
+class AssistantInput(QPlainTextEdit):
+    """The message box; a pasted picture is attached to the message instead of inserted."""
+
+    picturePasted = Signal(object)
+
+    def insertFromMimeData(self, source):
+        image = clipboard_image(source)
+        if image is None:
+            super().insertFromMimeData(source)
+            return
+        self.picturePasted.emit(image)
 
 
 class AssistantSettingsDialog(QDialog):
@@ -212,6 +303,7 @@ class AssistantPanel(QWidget):
         self.agent.runningChanged.connect(self.update_buttons)
         self.doc, self.page, self.selection = None, 0, None
         self.messages, self.history, self.queue = [], [], []
+        self.pending = []
         self.active_message = None
         self.testing = False
         self._provider_id = None
@@ -283,10 +375,16 @@ class AssistantPanel(QWidget):
                 self.quick_buttons.append(button)
                 row.addWidget(button)
             layout.addLayout(row)
-        self.input = QPlainTextEdit()
+        self.input = AssistantInput()
         self.input.setPlaceholderText("Ask about this PDF… (Ctrl+Enter to send)")
         self.input.setMaximumHeight(100)
         self.input.textChanged.connect(self.update_buttons)
+        self.input.picturePasted.connect(self.attach_image)
+        self.attachments = QWidget()
+        self.attachments_layout = QHBoxLayout(self.attachments)
+        self.attachments_layout.setContentsMargins(0, 0, 0, 0)
+        self.attachments.setVisible(False)
+        layout.addWidget(self.attachments)
         layout.addWidget(self.input)
         bottom = QHBoxLayout()
         self.status = QLabel("")
@@ -357,12 +455,60 @@ class AssistantPanel(QWidget):
         )
         self.render()
 
+    def attach_image(self, image):
+        """Attach a pasted picture to the next message."""
+        if len(self.pending) >= MAX_IMAGES:
+            self.status.setText(f"Only {MAX_IMAGES} pictures per message.")
+            return
+        data = encode_image(image)
+        if not data or len(data) > MAX_IMAGE_BYTES:
+            self.status.setText("That picture is too large to send.")
+            return
+        self.pending.append(AssistantImage(data, "image/jpeg", encode_thumbnail(image)))
+        self.render_attachments()
+        self.update_buttons()
+
+    def remove_image(self, index):
+        if 0 <= index < len(self.pending):
+            self.pending.pop(index)
+            self.render_attachments()
+            self.update_buttons()
+
+    def clear_images(self):
+        self.pending.clear()
+        self.render_attachments()
+
+    def render_attachments(self):
+        """The chips above the message box: one per picture waiting to be sent."""
+        while self.attachments_layout.count():
+            item = self.attachments_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        for index, image in enumerate(self.pending):
+            chip = QWidget()
+            row = QHBoxLayout(chip)
+            row.setContentsMargins(0, 0, 0, 0)
+            preview = QLabel()
+            preview.setPixmap(QPixmap.fromImage(QImage.fromData(image.thumb or b"")))
+            preview.setFixedSize(preview.pixmap().size())
+            row.addWidget(preview)
+            remove = QPushButton("✕")
+            remove.setToolTip("Remove this picture")
+            remove.setFixedSize(24, 24)
+            remove.clicked.connect(lambda checked=False, index=index: self.remove_image(index))
+            row.addWidget(remove)
+            self.attachments_layout.addWidget(chip)
+        self.attachments_layout.addStretch(1)
+        self.attachments.setVisible(bool(self.pending))
+
     def new_chat(self):
         self.queue.clear()
         self.agent.cancel()
         self.agent.reset_session()
         self.messages.clear()
         self.history.clear()
+        self.clear_images()
         self.active_message = None
         self.error = ""
         self.render()
@@ -382,14 +528,21 @@ class AssistantPanel(QWidget):
 
     def submit(self, request=None):
         text = (request if request is not None else self.input.toPlainText()).strip()
-        if not text or self.doc is None:
+        images = list(self.pending)
+        if not text and not images:
+            return
+        if self.doc is None:
             return
         if self.testing:
             self.status.setText("Wait for the connection test to finish.")
             return
+        if not text:
+            # A picture on its own is a question too.
+            text = IMAGE_REQUEST
         if request is None:
             self.input.clear()
-        entry = dict(text=text, page=self.page, selection=self.selection)
+        self.clear_images()
+        entry = dict(text=text, page=self.page, selection=self.selection, images=images)
         if self.agent.running:
             self.queue.append(entry)
             self.update_buttons()
@@ -411,13 +564,13 @@ class AssistantPanel(QWidget):
             if len(included) < self.doc.page_count:
                 prompt += "\n\nOnly the pages marked above were supplied; do not invent content from omitted pages."
             self.error = ""
-            self.agent.run(prompt, self.history, options=options)
+            self.agent.run(prompt, self.history, options=options, images=entry.get("images"))
         except (OSError, ValueError, RuntimeError) as exc:
             self.error = str(exc)
             self.render()
             self.update_buttons()
             return
-        self.messages.append(dict(role="user", text=entry["text"]))
+        self.messages.append(dict(role="user", text=entry["text"], pictures=len(entry.get("images") or [])))
         self.active_message = dict(role="assistant", text="", error=None, added=set(), request=entry["text"])
         self.messages.append(self.active_message)
         self.render()
@@ -462,7 +615,8 @@ class AssistantPanel(QWidget):
 
     def update_buttons(self, *_):
         has_doc = self.doc is not None
-        self.send_button.setEnabled(has_doc and bool(self.input.toPlainText().strip()) and not self.testing)
+        has_message = bool(self.input.toPlainText().strip()) or bool(self.pending)
+        self.send_button.setEnabled(has_doc and has_message and not self.testing)
         self.send_button.setText("Queue" if self.agent.running else "Send")
         self.stop_button.setEnabled(self.agent.running)
         self.picker.setEnabled(not self.agent.running)
@@ -479,6 +633,9 @@ class AssistantPanel(QWidget):
         for message_index, message in enumerate(self.messages):
             if message["role"] == "user":
                 sections.append("<h4>You</h4>" + self.core.render(message["text"]))
+                if message.get("pictures"):
+                    count = message["pictures"]
+                    sections.append(f"<p><i>{count} picture(s) attached</i></p>")
                 continue
             sections.append("<h4>Assistant</h4>")
             streaming = message is self.active_message and self.agent.running

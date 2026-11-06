@@ -136,6 +136,12 @@ Claude selected; `Ctrl+,` opens assistant settings.
 - **Reading:** Summarize page, Summarize PDF, Explain, Key points, Translate,
   and Questions. Replies stream into the panel; click a page citation to jump.
   Use `Ctrl+Enter` to send; messages sent during a reply queue in order.
+- **Pictures:** press `Ctrl+V` in the message box to paste a screenshot or any
+  copied image. It is scaled to 1568 px, shown as a chip you can remove, and
+  sent with your message, so the model can look at it. Up to four pictures per
+  message, and a picture on its own is a question. With an API provider the
+  picture travels inside the message; with an agent CLI it is written next to
+  the request so the agent can open it.
 - **Annotating:** ask for highlights, underlines, strikeouts, or margin notes.
   Suggestions have **Show passage** and **Add to PDF** links. The app validates
   the page and exact quote before adding anything. Added notes support undo,
@@ -350,6 +356,7 @@ python3 tests/gui_smoke.py out.png   # GUI: selection, tools, persistence, print
 python3 tests/test_drawing_preview.py # live drawing positions across zoom and scroll
 python3 tests/test_settings.py        # migration of preferences from the previous name
 python3 tests/test_assistant.py       # fake CLI and localhost API, no external AI calls
+python3 tests/test_assistant_images.py # pasted pictures: scaling, message parts, prompts
 node --test tests/assistant_core/*.test.js # shared heehawPDF protocol tests (optional Node)
 ```
 

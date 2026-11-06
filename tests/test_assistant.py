@@ -25,16 +25,18 @@ os.environ["XDG_DATA_HOME"] = TEST_HOME.name + "/data"
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pymupdf
-from PySide6.QtCore import QSettings, QUrl
+from PySide6.QtCore import QSettings, Qt, QUrl
+from PySide6.QtGui import QGuiApplication, QImage
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from ahamargin.assistant import (
-    Agent, AssistantConfig, AssistantCore, KeyStore, document_context, proposed_annotation,
+    Agent, AssistantConfig, AssistantCore, AssistantImage, KeyStore, document_context,
+    proposed_annotation,
 )
 from ahamargin.core.annotations import AnnKind
 from ahamargin.core.document import PdfDocument
-from ahamargin.ui.assistant_panel import AssistantSettingsDialog
+from ahamargin.ui.assistant_panel import AssistantSettingsDialog, IMAGE_REQUEST
 from ahamargin.ui.main_window import MainWindow
 
 ANSWER = '''The main finding is on [p. 2].
@@ -196,6 +198,36 @@ class AssistantTests(unittest.TestCase):
         wait_for(lambda: self.states)
         self.assertIn("not found", self.states[-1]["error"])
 
+    def test_pasted_picture_travels_with_the_message_to_an_api(self):
+        provider, options = self.api()
+        self.agent.run("What is this?", [], provider, options,
+                      images=[AssistantImage(b"\xff\xd8\xff\xd9", "image/jpeg")])
+        wait_for(lambda: self.states)
+        self.assertIsNone(self.states[-1]["error"])
+        content = self.server.requests[-1][2]["messages"][-1]["content"]
+        self.assertEqual(content[0], {"type": "text", "text": "What is this?"})
+        self.assertEqual(content[1]["type"], "image_url")
+        self.assertTrue(content[1]["image_url"]["url"].startswith("data:image/jpeg;base64,"))
+
+    def test_pasted_picture_is_written_next_to_the_request_for_a_cli_agent(self):
+        script, snapshot = self.path / "claude", self.path / "job.json"
+        script.write_text(f"#!{sys.executable}\nimport json,os,pathlib,sys\n"
+            f"stdin=sys.stdin.read()\n"
+            f"pathlib.Path({str(snapshot)!r}).write_text(json.dumps("
+            "{'argv':sys.argv[1:],'files':sorted(os.listdir('.')),'stdin':stdin}))\n"
+            "print(json.dumps({'type':'result','subtype':'success','result':'Seen the picture','session_id':'fake-session'}))\n")
+        script.chmod(0o700)
+        options = {"model": "sonnet", "bin": str(script)}
+        self.agent.run("What is this?", [], self.config.provider("claude"), options,
+                      images=[AssistantImage(b"\xff\xd8\xff\xd9", "image/jpeg")])
+        wait_for(lambda: self.states)
+        self.assertIsNone(self.states[-1]["error"])
+        job = json.loads(snapshot.read_text())
+        argv = job["argv"]
+        self.assertEqual(argv[argv.index("--tools") + 1], "Read")
+        self.assertIn("figure-1.jpg", job["files"])
+        self.assertIn("figure-1.jpg", job["stdin"])
+
     def test_claude_session_resumes_without_replaying_system_prompt_as_text(self):
         script, snapshot = self.path / "claude", self.path / "arguments.json"
         script.write_text(f"#!{sys.executable}\nimport json,pathlib,sys\n"
@@ -305,6 +337,37 @@ class AssistantTests(unittest.TestCase):
         self.assertIn('<selection page="2">', messages[-1]["content"])
         self.assertIn("=== Page 2 ===", messages[-1]["content"])
         self.assertIn("Second question", messages[-1]["content"])
+
+    def test_pasting_a_picture_attaches_it_and_sends_it(self):
+        window = self.window()
+        panel = window.assistant_panel
+        provider, options = self.api()
+        panel.config.values["customApis"].append(dict(id=provider["id"], name="Test API", baseURL=options["baseURL"], model=options["model"], noKey=True))
+        panel.config.values["provider"] = provider["id"]
+        panel.reload_providers()
+        image = QImage(320, 200, QImage.Format.Format_RGB32)
+        image.fill(Qt.GlobalColor.blue)
+        QGuiApplication.clipboard().setImage(image)
+        panel.input.paste()
+        self.assertEqual(len(panel.pending), 1)
+        self.assertTrue(panel.attachments.isVisibleTo(panel))
+        panel.input.setPlainText("What is this?")
+        panel.submit()
+        wait_for(lambda: not panel.agent.running and panel.history)
+        content = self.server.requests[-1][2]["messages"][-1]["content"]
+        self.assertEqual(content[0]["type"], "text")
+        self.assertEqual(content[1]["type"], "image_url")
+        self.assertEqual(panel.pending, [])
+        # The picture itself is not kept in the conversation.
+        self.assertNotIn("base64", json.dumps(panel.history))
+        # A picture on its own is a question, too.
+        QGuiApplication.clipboard().setImage(image)
+        panel.input.paste()
+        panel.submit()
+        wait_for(lambda: len(panel.history) == 4 and not panel.agent.running)
+        content = self.server.requests[-1][2]["messages"][-1]["content"]
+        self.assertIn(IMAGE_REQUEST, content[0]["text"])
+        self.assertEqual(content[1]["type"], "image_url")
 
     def test_settings_save_named_api_and_test_without_pdf_context(self):
         window = self.window()
