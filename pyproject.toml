@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ahaMargin-linux"
-version = "1.1.0"
+version = "1.2.0"
 description = "A MarginNote style PDF marker for Linux: capture passages into a margin note column."
 readme = "README.md"
 requires-python = ">=3.10"
