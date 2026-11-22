@@ -387,6 +387,8 @@ The PDF itself cannot be edited, but you can annotate it. When the user asks you
     { id: "claude", title: "Claude", kind: "cli", command: "claude", format: "claude", sessions: true,
       models: ["haiku", "sonnet", "opus"], defaultModel: "sonnet",
       setup: "Run `claude auth login` in a terminal.", note: "Claude Code CLI · no file access" },
+    { id: "agy", title: "Antigravity (agy)", kind: "cli", command: "agy", format: "text", models: [],
+      setup: "Run `agy` once in a terminal to sign in.", note: "Antigravity CLI · no file access" },
     { id: "codex", title: "Codex", kind: "cli", command: "codex", format: "text", models: [],
       setup: "Run `codex login` in a terminal.", note: "Codex CLI · read-only sandbox" },
     { id: "opencode", title: "OpenCode", kind: "cli", command: "opencode", format: "opencode", models: [],
@@ -411,6 +413,8 @@ The PDF itself cannot be edited, but you can annotate it. When the user asks you
       models: ["MiniMax-M2.7-highspeed", "MiniMax-M2.7"], keyVar: "MINIMAX_API_KEY", note: "api.minimaxi.com (global: api.minimax.io)" },
     { id: "openai-api", title: "OpenAI API", kind: "api", baseURL: "https://api.openai.com/v1",
       models: ["gpt-5-mini", "gpt-5"], keyVar: "OPENAI_API_KEY", note: "platform.openai.com" },
+    { id: "grok-api", title: "Grok (xAI)", kind: "api", baseURL: "https://api.x.ai/v1",
+      models: ["grok-4.7"], defaultModel: "grok-4.7", keyVar: "XAI_API_KEY", streamUsage: true, note: "console.x.ai" },
     { id: "openrouter", title: "OpenRouter", kind: "api", baseURL: "https://openrouter.ai/api/v1",
       models: ["deepseek/deepseek-chat", "qwen/qwen3-coder", "moonshotai/kimi-k2"], keyVar: "OPENROUTER_API_KEY", note: "openrouter.ai" },
     { id: "ollama", title: "Ollama (local)", kind: "api", baseURL: "http://localhost:11434/v1",
@@ -443,6 +447,15 @@ The PDF itself cannot be edited, but you can annotate it. When the user asks you
         if (model) argv.push("--model", model);
         argv.push(opts.resume ? "--resume" : "--session-id", opts.sessionId);
         return { argv, stdin: true, format: "claude" };
+      }
+      case "agy": {
+        const settings = { agentMode: "", toolPermission: "request-review", permissions: {
+          deny: ["read_file(*)", "write_file(*)", "command(*)", "mcp(*)", "read_url(*)", "execute_url(*)"]
+        } };
+        const argv = ["agy", "--output-format", "text", "--disable-slash-commands", "--settings", JSON.stringify(settings)];
+        if (model) argv.push("--model", model);
+        argv.push("--print", "@@PROMPT@@");
+        return { argv, stdin: false, format: "text" };
       }
       case "codex": {
         const argv = ["codex", "exec", "--skip-git-repo-check", "--sandbox", "read-only", "--color", "never",
@@ -508,11 +521,13 @@ The PDF itself cannot be edited, but you can annotate it. When the user asks you
   }
 
   /** Body for an OpenAI-compatible /chat/completions request. */
-  function chatRequest(model, system, history, current) {
+  function chatRequest(model, system, history, current, streamUsage) {
     const messages = [{ role: "system", content: system }];
     for (const m of history.slice(-20)) messages.push({ role: m.role, content: m.content });
     messages.push({ role: "user", content: current });
-    return { model, stream: true, messages };
+    const body = { model, stream: true, messages };
+    if (streamUsage) body.stream_options = { include_usage: true };
+    return body;
   }
 
   const ANSI = /\u001b\[[0-9;?]*[ -\/]*[@-~]|\u001b\][^\u0007]*(\u0007|\u001b\\)/g;

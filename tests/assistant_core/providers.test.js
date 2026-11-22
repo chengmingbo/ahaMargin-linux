@@ -130,3 +130,30 @@ test("OutputState uses stdout as the error when stderr is empty", () => {
   assert.equal(st.error, "LLM not set\n\nUse /login.");
   assert.equal(st.text, "");
 });
+
+test("Antigravity uses print mode with model selection and restricted tools", () => {
+  const p = Core.provider("agy");
+  assert.equal(p.command, "agy");
+  const inv = Core.invocation(p, { ...opts, model: "chosen model" });
+  assert.equal(inv.argv[0], "agy");
+  assert.equal(inv.argv[inv.argv.indexOf("--print") + 1], "@@PROMPT@@");
+  assert.equal(inv.argv[inv.argv.indexOf("--model") + 1], "chosen model");
+  assert.equal(inv.stdin, false);
+  assert.equal(inv.format, "text");
+  const settings = JSON.parse(inv.argv[inv.argv.indexOf("--settings") + 1]);
+  for (const rule of ["read_file(*)", "write_file(*)", "command(*)", "mcp(*)"]) {
+    assert.ok(settings.permissions.deny.includes(rule));
+  }
+});
+
+test("Grok builds an authenticated xAI chat request with streamed usage", () => {
+  const p = Core.provider("grok-api");
+  assert.equal(p.kind, "api");
+  assert.equal(p.keyVar, "XAI_API_KEY");
+  const inv = Core.invocation(p, { ...opts });
+  assert.ok(inv.argv.includes("https://api.x.ai/v1/chat/completions"));
+  assert.ok(inv.argv.includes("@auth-header.txt"));
+  const request = Core.chatRequest(p.defaultModel, "SYS", [], "hello", p.streamUsage);
+  assert.equal(request.model, "grok-4.7");
+  assert.deepEqual(request.stream_options, { include_usage: true });
+});

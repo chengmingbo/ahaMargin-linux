@@ -319,7 +319,7 @@ class Agent(QObject):
                 (self.job / figure_name(index)).write_bytes(image.data)
             figures = "\n\n" + figures_prompt(images)
         if provider["kind"] == "api":
-            body = self.core.call("chatRequest", options["model"], system, history, prompt)
+            body = self.core.call("chatRequest", options["model"], system, history, prompt, provider.get("streamUsage", False))
             if images:
                 # The picture travels inside the message, as an image_url block.
                 body["messages"][-1]["content"] = image_content(prompt, images)

@@ -388,3 +388,7 @@ pipeline are all exercised for real. It writes a screenshot at the end.
 The application code is MIT — see [LICENSE](LICENSE). The bundled heehawPDF
 assistant core and runner use the PolyForm Noncommercial License 1.0.0 — see
 [third-party notices](THIRD_PARTY_NOTICES.md) and the included component license.
+
+### Additional AI providers
+
+Antigravity (`agy`) is available in assistants that run local CLI agents. Run `agy` once in a terminal to sign in. Grok is available in assistants with API providers, using `https://api.x.ai/v1`, model `grok-4.7`, and an xAI API key (`XAI_API_KEY`, or the assistant’s key settings). Existing saved providers and accounts are preserved.
